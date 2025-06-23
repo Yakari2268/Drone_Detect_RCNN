@@ -1,0 +1,17 @@
+# Model Backbone
+BACKBONE: resnet50_fpn  # Feature extractor
+
+# Optimizer Settings
+OPTIMIZER: SGD
+LEARNING_RATE: 0.005
+MOMENTUM: 0.9
+WEIGHT_DECAY: 0.0005
+
+# Training Settings
+BATCH_SIZE: 2
+EPOCHS: 10
+LOSS_LAMBDA: 10  # Balance between classification and bbox regression loss
+
+# Anchor Box Settings
+ANCHOR_SCALES: [32, 64, 128, 256, 512]
+ANCHOR_RATIOS: [0.5, 1.0, 2.0]
