@@ -12,7 +12,6 @@ from yolov5.utils.general import non_max_suppression
 from yolov5.utils.torch_utils import select_device
 import sys
 
-
 model_path = "./trained_models/drone_detect_RCNN.pt"
 CLASS_NAMES = ['background', 'drone']  # for model2
 font = ImageFont.load_default()

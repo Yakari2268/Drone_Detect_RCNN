@@ -5,30 +5,21 @@ import numpy as np
 from YOLOv5 import letterbox, scale_coords
 from PIL import Image, ImageDraw, ImageFont
 import torchvision.transforms.functional as F
-sys.path.insert(0, './yolov5')  # Adjust path to YOLOv5 repo if needed
 
+from sort import sort
+
+sys.path.insert(0, './yolov5')  # Adjust path to YOLOv5 repo if needed
 from yolov5.models.common import DetectMultiBackend
 from yolov5.utils.general import non_max_suppression
 from yolov5.utils.torch_utils import select_device
 import sys
 
+mot_tracker = sort.Sort(min_hits=3, max_age=15, iou_threshold=0.3)
 
 model_path = "./trained_models/drone_detect_RCNN.pt"
 CLASS_NAMES = ['background', 'drone']  # for model2
 font = ImageFont.load_default()
 
-# Global Kalman tracker (initialize once)
-kalman = cv2.KalmanFilter(4, 2)
-kalman.measurementMatrix = np.array([[1, 0, 0, 0],
-                                     [0, 1, 0, 0]], np.float32)
-kalman.transitionMatrix = np.array([[1, 0, 1, 0],
-                                    [0, 1, 0, 1],
-                                    [0, 0, 1, 0],
-                                    [0, 0, 0, 1]], np.float32)
-kalman.processNoiseCov = np.eye(4, dtype=np.float32) * 0.03
-kalman.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1
-kalman.statePre = np.array([[0], [0], [0], [0]], np.float32)
-init_kalman = False
 
 
 def load_model():
@@ -42,8 +33,7 @@ def detect_from_camera_dual(model1, model2, class_names, device):
     cap = cv2.VideoCapture(0)
     stride = model1.stride
     img_size = 640
-    names = model1.names
-    global kalman, init_kalman
+    names = model1.names    
 
     while True:
         ret, frame = cap.read()
@@ -72,6 +62,7 @@ def detect_from_camera_dual(model1, model2, class_names, device):
                     cv2.putText(base_frame, label, (int(xyxy[0]), int(xyxy[1]) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (0, 255, 0), 1)
 
+
         # ----- RCNN Inference -----
         image_pil = Image.fromarray(cv2.cvtColor(base_frame, cv2.COLOR_BGR2RGB))
         img_tensor2 = F.to_tensor(image_pil).to(device)
@@ -84,17 +75,21 @@ def detect_from_camera_dual(model1, model2, class_names, device):
         labels = prediction['labels'].cpu().numpy()
         scores = prediction['scores'].cpu().numpy()
 
-        # Find the most confident detection
-        max_score = 0
-        best_box = None
-        best_label = None
+        # Collect only drone detections
+        drone_detections = []
         for box, label, score in zip(boxes, labels, scores):
-            if score > 0.5 and score > max_score:
-                best_box = box
-                best_label = label
-                max_score = score
+            if score >= 0.5 and label == 1:  # 'drone' is class 1
+                drone_detections.append([*box, score])
 
-        # Draw all boxes normally
+        drone_detections_np = np.array(drone_detections)
+
+        # Only track if we have detections
+        if drone_detections_np.shape[0] > 0:
+            tracked_objects = mot_tracker.update(drone_detections_np)
+        else:
+            tracked_objects = []
+
+        # Draw all boxes normally (RCNN output)
         for box, label, score in zip(boxes, labels, scores):
             if score < 0.5:
                 continue
@@ -104,22 +99,14 @@ def detect_from_camera_dual(model1, model2, class_names, device):
             draw.rectangle(box, outline="red", width=2)
             draw.text((box[0], box[1] - 10), text, fill="red", font=font)
 
-        # --- Kalman Filter Tracking (based on best box center) ---
-        if best_box is not None:
-            cx = int((best_box[0] + best_box[2]) / 2)
-            cy = int((best_box[1] + best_box[3]) / 2)
-            measured = np.array([[np.float32(cx)], [np.float32(cy)]])
+        # Draw tracked drone boxes (blue)
+        for track in tracked_objects:
+            x1, y1, x2, y2, track_id = track
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            draw.rectangle([x1, y1, x2, y2], outline="blue", width=2)
+            draw.text((x1, y1 - 15), f"Drone ID: {int(track_id)}", fill="blue", font=font)
 
-            if not init_kalman:
-                kalman.statePre[:2] = measured
-                init_kalman = True
-
-            kalman.correct(measured)
-            predicted = kalman.predict()
-
-            # Draw Kalman-predicted center on image_pil
-            draw.ellipse((predicted[0]-5, predicted[1]-5, predicted[0]+5, predicted[1]+5), outline="green", width=2)
-            draw.text((predicted[0]+8, predicted[1]), "Predicted", fill="green", font=font)
+        
 
         # Convert PIL with RCNN boxes back to OpenCV
         final_frame = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)

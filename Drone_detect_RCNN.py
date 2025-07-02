@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 CLASS_NAMES = ['background', 'drone']
 
 # Load model with safe_globals context
-model_path = "./models/drone_detect_RCNN.pt"
+model_path = "./trained_models/drone_detect_RCNN.pt"
 with torch.serialization.safe_globals([FasterRCNN]):
     model = torch.load(model_path, weights_only=False)
 model.eval()
