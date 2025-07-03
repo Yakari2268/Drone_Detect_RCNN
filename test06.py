@@ -88,30 +88,55 @@ while True:
     
     # Filter out low-confidence detections and detections that are not 'drone'
     # Assuming 'drone' is class 1
+
+    detections_for_tracker = []
     drone_indices = (labels == 1) & (scores > 0.5)
     
     bboxes_xywh = []
     confs = []
+    clss = []
     
-    for bbox, score in zip(boxes[drone_indices], scores[drone_indices]):
+    for i in np.where(drone_indices)[0]:
+        bbox = boxes[i]
+        score = scores[i]
+        label = labels[i]
+
         x1, y1, x2, y2 = bbox
         w, h = x2 - x1, y2 - y1
         bboxes_xywh.append([x1, y1, w, h])
         confs.append(score)
+        clss.append(label)
+
+        detections_for_tracker.append([x1,y1,w,h,score,label])
 
     # 3. --- UPDATE TRACKER ---
-    if len(bboxes_xywh) > 0:
-        # DeepSORT requires the detections in a specific format and the original frame
-        xywhs = torch.tensor(bboxes_xywh)
-        confss = torch.tensor(confs)
-        
-        # Pass detections to DeepSORT for tracking
-        outputs = deepsort.update(xywhs, confss, frame)
-    else:
-        # If no detections, just update with an empty list
-        deepsort.increment_ages()
-        outputs = []
+    xywhs = torch.tensor(bboxes_xywh)
+    confss = torch.tensor(confs)
+    clss_tensor = torch.tensor(clss)
 
+    if len(detections_for_tracker) > 0:
+        # Convert the list to a NumPy array for robust slicing
+        detections_np = np.array(detections_for_tracker)
+
+        # Slice the NumPy array to get the required components
+        # This correctly handles the case of a single detection, keeping it as a 2D array
+        xywhs_np = detections_np[:, :4]
+        confs_np = detections_np[:, 4]
+        clss_np = detections_np[:, 5]
+
+        # Convert the NumPy arrays to PyTorch tensors
+        xywhs = torch.from_numpy(xywhs_np).float()
+        confss = torch.from_numpy(confs_np).float()
+        clss_tensor = torch.from_numpy(clss_np).float()
+        
+        # Pass the correctly shaped tensors to the tracker
+        outputs = deepsort.update(xywhs, confss, clss_tensor, frame)
+
+    else:
+        # If no detections, call update with empty tensors
+        # This is crucial for the tracker to age and manage existing tracks
+        deepsort.update(torch.empty(0, 4), torch.empty(0), torch.empty(0), frame)
+        outputs = torch.empty(0, 5) # Ensure outputs is an empty tensor
 
     # 4. --- VISUALIZE TRACKING RESULTS ---
     # The `outputs` variable now contains tracked objects with their IDs
@@ -120,6 +145,9 @@ while True:
     if len(outputs) > 0:
         for output in outputs:
             # `output` format: [x1, y1, x2, y2, track_id]
+
+            if len(output) < 5:
+                continue
             x1, y1, x2, y2, track_id = map(int, output)
             
             # Assign a unique color to each track ID
